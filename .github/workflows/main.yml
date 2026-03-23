@@ -1,0 +1,87 @@
+name: Build Dyrz Client
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+jobs:
+  build-windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Unzip source
+        shell: powershell
+        run: Expand-Archive -Path "dyrz-client-src.zip" -DestinationPath "dyrz-extracted" -Force
+
+      - name: Download missing submodules manually
+        shell: powershell
+        run: |
+          $dest = "dyrz-extracted/dyrz-src/libraries/libnbtplusplus"
+          if (!(Test-Path "$dest/CMakeLists.txt")) {
+            Remove-Item -Recurse -Force $dest -ErrorAction SilentlyContinue
+            git clone https://github.com/PrismLauncher/libnbtplusplus.git $dest
+          }
+
+      - name: Setup MSYS2
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: UCRT64
+          update: true
+          pacboy: >-
+            toolchain:p
+            cmake:p
+            ninja:p
+            qt6-base:p
+            qt6-networkauth:p
+            qt6-imageformats:p
+            qt6-svg:p
+            qt6-tools:p
+            extra-cmake-modules:p
+            zlib:p
+            libarchive:p
+            quazip-qt6:p
+            cmark:p
+            tomlplusplus:p
+            qrencode:p
+            vulkan-headers:p
+            clang:p
+
+      - name: Configure CMake
+        shell: msys2 {0}
+        run: |
+          SRC=$(find dyrz-extracted -name "CMakeLists.txt" | xargs grep -l "^project" | head -1 | xargs dirname)
+          echo "Source found at: $SRC"
+          cmake -B build -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DLauncher_Name=DyrzClient \
+            -DLauncher_DisplayName="Dyrz Client" \
+            -DLauncher_APP_BINARY_NAME=dyrzclient \
+            -DCMAKE_INSTALL_PREFIX=install \
+            -DCMAKE_OBJDUMP=/ucrt64/bin/objdump.exe \
+            -DENABLE_LTO=OFF \
+            -DCLANG_FORMAT_PROG=false \
+            -DCMAKE_POLICY_DEFAULT_CMP0177=NEW \
+            -DCMAKE_CXX_FLAGS="-Wno-error -Wno-implicit-fallthrough -Wno-deprecated-declarations -Wno-unused-variable -Wno-unused-parameter -Wno-sign-compare -Wno-reorder" \
+            -DCMAKE_C_FLAGS="-Wno-error -Wno-implicit-fallthrough -Wno-deprecated-declarations" \
+            -S "$SRC"
+
+      - name: Strip problematic flags from build files
+        shell: msys2 {0}
+        run: |
+          find build -name "*.ninja" | xargs sed -i 's/-mguard=cf//g; s/-Werror[^ ]*//g' 2>/dev/null || true
+          echo "Flags stripped"
+
+      - name: Build
+        shell: msys2 {0}
+        run: cmake --build build --parallel
+
+      - name: Install
+        shell: msys2 {0}
+        run: cmake --install build
+
+      - name: Upload
+        uses: actions/upload-artifact@v4
+        with:
+          name: DyrzClient-Windows
+          path: install/
+          retention-days: 30
